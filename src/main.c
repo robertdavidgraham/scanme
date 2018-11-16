@@ -1,15 +1,28 @@
 #include "dispatcher.h"
 #include "builtin-echo.h"
+#include "stub-lua.h"
 
-#include <stdio.h>
 #include <signal.h>
+#include <stdio.h>
+
+#if defined(WIN32)
+#endif
+
+
 
 int main(int argc, char *argv[])
 {
     struct dispatcher *d = NULL;
     
     /* Ignore the send() problem */
+#if defined(SIGPIPE)
     signal(SIGPIPE, SIG_IGN);
+#endif
+
+    /* Initialize the Lua subsystem */
+    stublua_init();
+    fprintf(stderr, "Lua version = %d.%d\n", 
+                (int)*lua_version(0)/100, (int)*lua_version(0)%100);
 
     /* create an instance of our polling object */
     d = dispatcher_create();

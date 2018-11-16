@@ -1,7 +1,9 @@
 #ifndef DISPATCHER_H
 #define DISPATCHER_H
 #include <sys/types.h>
+#include <stdio.h>
 struct sockaddr_storage;
+struct sockaddr;
 struct dispatcher;
 
 /* Flags for what type of server to add with `dispatcher_add_server` */
@@ -74,7 +76,7 @@ void dispatcher_add_connection(
     struct dispatcher *d, 
     int fd, 
     struct sockaddr *sa, 
-    socklen_t sa_addrlen,
+    size_t sa_addrlen,
     dispatch_handler handler,
     void *handlerdata);
 

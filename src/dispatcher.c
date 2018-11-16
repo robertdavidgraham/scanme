@@ -1,6 +1,7 @@
 /*
  */
 #include "dispatcher.h"
+#include "pixie-timer.h"
 #include <ctype.h>
 #include <errno.h>
 #include <signal.h>
@@ -10,11 +11,29 @@
 #include <string.h>
 #include <time.h>
 
+#if defined(WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <stdio.h>
+#if defined(_MSC_VER)
+#pragma comment(lib, "Ws2_32.lib")
+#endif
+#define sockets_close(fd) closesocket(fd)
+#define sockets_poll WSAPoll
+#define sockets_errno ((int)WSAGetLastError())
+const char *sockets_strerror(int err);
+#else
 #include <unistd.h>
-
 #include <sys/socket.h>
 #include <sys/poll.h>
 #include <netdb.h>
+#define sockets_close(fd) close(fd)
+#define sockets_poll poll
+#endif
+
 
 struct my_connection
 {
@@ -37,6 +56,26 @@ struct dispatcher
     unsigned max;
 };
 
+#if defined(WIN32)
+const char *sockets_strerror(int err)
+{
+    char *buf = NULL;
+    if (buf)
+        LocalFree(buf);
+
+    FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER |
+                  FORMAT_MESSAGE_FROM_SYSTEM |
+                  FORMAT_MESSAGE_IGNORE_INSERTS,
+                  NULL, err,
+                  MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+                  (LPTSTR)&buf, 0, NULL);
+
+
+    return buf;
+}
+
+#endif
+
 /****************************************************************************
  ****************************************************************************/
 struct dispatcher *dispatcher_create(void)
@@ -44,6 +83,11 @@ struct dispatcher *dispatcher_create(void)
     struct dispatcher *d;
     d = malloc(sizeof(*d));
     
+    /* [WINDOWS] Cruft needed by Windows at the start of a program */
+#if defined(WIN32)
+    {WSADATA x; WSAStartup(0x0201, &x);}
+#endif
+
     /* Start with 1 entries, an empty one marking the end of he list */
     d->max = 1;
     d->list = malloc(d->max * sizeof(*d->list));
@@ -76,8 +120,8 @@ void dispatcher_remove_at(struct dispatcher *d, size_t index)
     
     /* close the socket if it's still open */
     if (d->list[index].fd > 0) {
-        close(d->list[index].fd);
-        d->list[index].fd = -1;
+        sockets_close(d->list[index].fd);
+        d->list[index].fd = (SOCKET)~0;
     }
     
     /* Free the connection-specific structure */
@@ -102,23 +146,20 @@ int dispatcher_dispatch(struct dispatcher *d, int wait_milliseconds)
     
     /* If there is nothing to do, then do a 'sleep()' instead */
     if (d == NULL || d->count == 0) {
-        struct timespec tv;
-        tv.tv_sec = 0;
-        tv.tv_nsec = 1000000LL * (long long)wait_milliseconds;
-        nanosleep(&tv, 0);
+        pixie_mssleep(wait_milliseconds);
         return -1;
         
     }
     
     /* wait for incoming event on any connection */
-    err = poll(d->list, d->count, wait_milliseconds);
+    err = sockets_poll(d->list, d->count, wait_milliseconds);
     if (err == -1) {
         switch (errno) {
             case EINTR:
                 return 0;
             default:
                 /* fatal program error, shouldn't be possible */
-                fprintf(stderr, "[-] poll(): %s\n", strerror(errno));
+                fprintf(stderr, "[-] poll(): %s\n", sockets_strerror(sockets_errno));
                 return -1;
         }
     } else if (err == 0) {
@@ -208,7 +249,7 @@ void dispatcher_add_connection(
     struct dispatcher *d, 
     int fd, 
     struct sockaddr *sa,
-    socklen_t sa_addrlen,
+    size_t sa_addrlen,
     dispatch_handler handler,
     void *handlerdata)
 {
@@ -298,16 +339,16 @@ int dispatcher_register_server(
     /* Create a file handle for the kernel resources */
     fd = socket(ai->ai_family, SOCK_STREAM, 0);
     if (fd == -1) {
-        fprintf(stderr, "[-] socket(): %s\n", strerror(errno));
+        fprintf(stderr, "[-] socket(): %s\n", sockets_strerror(sockets_errno));
         goto cleanup;
     }
 
     /* Allow multiple processes to share this IP address. This is needed for 
      * fast restart, when the previous process leaves the listening socket
      * in a waiting state. */
-    err = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+    err = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (void*)&yes, sizeof(yes));
     if (err) {
-        fprintf(stderr, "[-] SO_REUSEADDR([%s]:%s): %s\n", hostaddr, hostport, strerror(errno));
+        fprintf(stderr, "[-] SO_REUSEADDR([%s]:%s): %s\n", hostaddr, hostport, sockets_strerror(sockets_errno));
     }
     
 #if defined(SO_REUSEPORT)
@@ -322,14 +363,14 @@ int dispatcher_register_server(
     /* Tell it to use the local port number (and optionally, address) */
     err = bind(fd, ai->ai_addr, ai->ai_addrlen);
     if (err) {
-        fprintf(stderr, "[-] bind([%s]:%s): %s\n", hostaddr, hostport, strerror(errno));
+        fprintf(stderr, "[-] bind([%s]:%s): %s\n", hostaddr, hostport, sockets_strerror(sockets_errno));
         goto cleanup;
     }
 
     /* Configure the socket for listening (i.e. accepting incoming connections) */
     err = listen(fd, 10);
     if (err) {
-        fprintf(stderr, "[-] listen([%s]:%s): %s\n", hostaddr, hostport, strerror(errno));
+        fprintf(stderr, "[-] listen([%s]:%s): %s\n", hostaddr, hostport, sockets_strerror(sockets_errno));
         goto cleanup;
     } else
         fprintf(stderr, "[+] listening on [%s]:%s\n", hostaddr, hostport);
@@ -346,7 +387,7 @@ int dispatcher_register_server(
     
 cleanup:
     if (fd != -1)
-        close(fd);
+        sockets_close(fd);
     if (ai)
         freeaddrinfo(ai);
     return return_code;

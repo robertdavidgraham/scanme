@@ -1,15 +1,33 @@
 #include "builtin-echo.h"
 #include "dispatcher.h"
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
 
-
+#if defined(WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <stdio.h>
+#if defined(_MSC_VER)
+#pragma comment(lib, "Ws2_32.lib")
+typedef intptr_t ssize_t;
+#endif
+#define sockets_close(fd) closesocket(fd)
+#define sockets_poll WSAPoll
+#define sockets_errno ((int)WSAGetLastError())
+const char *sockets_strerror(int err);
+#else
 #include <unistd.h>
 #include <sys/socket.h>
 #include <sys/poll.h>
 #include <netdb.h>
+#endif
+
 
 struct echo_data
 {
