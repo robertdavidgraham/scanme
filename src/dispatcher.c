@@ -32,6 +32,9 @@ const char *sockets_strerror(int err);
 #include <netdb.h>
 #define sockets_close(fd) close(fd)
 #define sockets_poll poll
+#define sockets_strerror(x) strerror(x)
+#define sockets_errno errno
+typedef int SOCKET;
 #endif
 
 
@@ -264,7 +267,7 @@ void dispatcher_add_connection(
     /* add per=connection info */
     c = d->connections[d->count];
     c->len = 0; /* init buffer */
-    c->sa_addrlen = sa_addrlen;
+    c->sa_addrlen = (socklen_t)sa_addrlen;
     memcpy(&c->sa, sa, sa_addrlen);
 
     /* get print name of remote connection */
